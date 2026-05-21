@@ -3,8 +3,12 @@ import { createServer } from 'http';
 import { Server } from 'socket.io';
 import cors from 'cors';
 import { v4 as uuidv4 } from 'uuid';
+import { dirname, join } from 'path';
+import { fileURLToPath } from 'url';
+import { existsSync } from 'fs';
 import { loadDB, saveDB } from './db.js';
 
+const __dirname = dirname(fileURLToPath(import.meta.url));
 const app = express();
 const server = createServer(app);
 const io = new Server(server, {
@@ -13,6 +17,12 @@ const io = new Server(server, {
 
 app.use(cors());
 app.use(express.json());
+
+// Serve static frontend files in production
+const distPath = join(__dirname, '..', 'dist');
+if (existsSync(distPath)) {
+  app.use(express.static(distPath));
+}
 
 // ==================== AUTH ====================
 app.post('/api/auth/login', (req, res) => {
@@ -252,6 +262,13 @@ io.on('connection', (socket) => {
     console.log('Cliente desconectado:', socket.id);
   });
 });
+
+// Catch-all: serve frontend for any non-API route (SPA support)
+if (existsSync(distPath)) {
+  app.get('*', (req, res) => {
+    res.sendFile(join(distPath, 'index.html'));
+  });
+}
 
 // ==================== START SERVER ====================
 const PORT = process.env.PORT || 3001;
