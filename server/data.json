@@ -1,0 +1,21 @@
+{
+  "reservations": [],
+  "vipCodes": [
+    {
+      "code": "ADMIN2024",
+      "active": true,
+      "createdAt": "2026-05-21T17:16:23.866Z"
+    }
+  ],
+  "promotions": [],
+  "settings": {
+    "pricePerHour": 80000,
+    "openTime": 6,
+    "closeTime": 23,
+    "courts": [
+      "Capri",
+      "Caney"
+    ],
+    "adminPassword": "admin123"
+  }
+}

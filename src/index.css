@@ -1,0 +1,122 @@
+@import url('https://fonts.googleapis.com/css2?family=Nunito:wght@400;600;700;800;900&family=Fredoka:wght@400;500;600;700&display=swap');
+@import "tailwindcss";
+
+@theme {
+  --color-turf-50: #f0fdf4;
+  --color-turf-100: #dcfce7;
+  --color-turf-200: #bbf7d0;
+  --color-turf-300: #86efac;
+  --color-turf-400: #4ade80;
+  --color-turf-500: #22c55e;
+  --color-turf-600: #16a34a;
+  --color-turf-700: #15803d;
+  --color-turf-800: #166534;
+  --color-turf-900: #14532d;
+
+  --color-field-50: #ecfdf5;
+  --color-field-100: #d1fae5;
+  --color-field-200: #a7f3d0;
+  --color-field-300: #6ee7b7;
+  --color-field-400: #34d399;
+  --color-field-500: #10b981;
+  --color-field-600: #059669;
+  --color-field-700: #047857;
+  --color-field-800: #065f46;
+  --color-field-900: #064e3b;
+
+  --color-energy-50: #fefce8;
+  --color-energy-100: #fef9c3;
+  --color-energy-200: #fef08a;
+  --color-energy-300: #fde047;
+  --color-energy-400: #facc15;
+  --color-energy-500: #eab308;
+  --color-energy-600: #ca8a04;
+  --color-energy-700: #a16207;
+
+  --color-danger-50: #fef2f2;
+  --color-danger-100: #fee2e2;
+  --color-danger-400: #f87171;
+  --color-danger-500: #ef4444;
+  --color-danger-600: #dc2626;
+
+  --font-display: 'Fredoka', sans-serif;
+  --font-body: 'Nunito', sans-serif;
+}
+
+@layer base {
+  * {
+    box-sizing: border-box;
+  }
+  
+  body {
+    font-family: var(--font-body);
+    margin: 0;
+    padding: 0;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+  
+  h1, h2, h3, h4, h5, h6 {
+    font-family: var(--font-display);
+  }
+}
+
+/* Custom scrollbar */
+::-webkit-scrollbar {
+  width: 6px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: #22c55e40;
+  border-radius: 3px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #22c55e80;
+}
+
+/* Animations */
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(10px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes slideIn {
+  from { opacity: 0; transform: translateX(-20px); }
+  to { opacity: 1; transform: translateX(0); }
+}
+
+@keyframes pulse-dot {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.5; transform: scale(1.2); }
+}
+
+@keyframes bounce-soft {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-4px); }
+}
+
+.animate-fade-in {
+  animation: fadeIn 0.3s ease-out forwards;
+}
+
+.animate-slide-in {
+  animation: slideIn 0.3s ease-out forwards;
+}
+
+.animate-pulse-dot {
+  animation: pulse-dot 2s ease-in-out infinite;
+}
+
+.animate-bounce-soft {
+  animation: bounce-soft 2s ease-in-out infinite;
+}
+
+/* Grass texture pattern */
+.grass-pattern {
+  background-image: 
+    radial-gradient(ellipse at 20% 50%, rgba(34, 197, 94, 0.05) 0%, transparent 50%),
+    radial-gradient(ellipse at 80% 20%, rgba(16, 185, 129, 0.05) 0%, transparent 50%),
+    radial-gradient(ellipse at 50% 80%, rgba(74, 222, 128, 0.03) 0%, transparent 50%);
+}
