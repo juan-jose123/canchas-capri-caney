@@ -4,11 +4,13 @@ import CourtSelector from '../components/CourtSelector';
 import Calendar from '../components/Calendar';
 import TimeSlots from '../components/TimeSlots';
 import BookingForm from '../components/BookingForm';
+import WeeklyCalendar from '../components/WeeklyCalendar';
 import { format } from 'date-fns';
-import { MapPin, CalendarDays, Zap } from 'lucide-react';
+import { MapPin, CalendarDays, Zap, Eye, ClipboardList } from 'lucide-react';
 
 export default function Home() {
-  const { darkMode, reservations, setReservations, addNotification } = useApp();
+  const { darkMode, reservations, setReservations, socket } = useApp();
+  const [view, setView] = useState('book'); // 'book' | 'agenda'
   const [court, setCourt] = useState('Capri');
   const [date, setDate] = useState(format(new Date(), 'yyyy-MM-dd'));
   const [selectedSlot, setSelectedSlot] = useState(null);
@@ -31,7 +33,7 @@ export default function Home() {
     setShowForm(true);
   };
 
-  const handleBookingSuccess = (reservation) => {
+  const handleBookingSuccess = () => {
     setShowForm(false);
     setSelectedSlot(null);
   };
@@ -49,66 +51,106 @@ export default function Home() {
           </span>
         </div>
         <h2 className={`text-2xl sm:text-3xl font-bold ${darkMode ? 'text-white' : 'text-turf-800'}`}>
-          Reserva tu cancha
+          Canchas Capri & Caney
         </h2>
         <p className={`text-sm mt-1 ${darkMode ? 'text-gray-400' : 'text-gray-500'}`}>
-          Escoge cancha, fecha y hora. Así de fácil.
+          Reserva o consulta disponibilidad
         </p>
       </div>
 
-      {/* Court Selector */}
-      <section>
-        <div className="flex items-center gap-2 mb-3">
-          <MapPin size={16} className={darkMode ? 'text-turf-400' : 'text-turf-600'} />
-          <h3 className={`text-sm font-bold uppercase tracking-wide ${darkMode ? 'text-gray-300' : 'text-gray-600'}`}>
-            Escoge la cancha
-          </h3>
-        </div>
-        <CourtSelector selected={court} onSelect={setCourt} />
-      </section>
+      {/* View Toggle */}
+      <div className={`grid grid-cols-2 gap-1 p-1 rounded-2xl ${
+        darkMode ? 'bg-gray-800' : 'bg-gray-100'
+      }`}>
+        <button
+          onClick={() => setView('book')}
+          className={`py-3 rounded-xl text-sm font-bold flex items-center justify-center gap-2 transition-all ${
+            view === 'book'
+              ? darkMode ? 'bg-turf-600 text-white shadow-md' : 'bg-white text-turf-700 shadow-md'
+              : darkMode ? 'text-gray-400' : 'text-gray-500'
+          }`}
+        >
+          <ClipboardList size={16} />
+          Reservar
+        </button>
+        <button
+          onClick={() => setView('agenda')}
+          className={`py-3 rounded-xl text-sm font-bold flex items-center justify-center gap-2 transition-all ${
+            view === 'agenda'
+              ? darkMode ? 'bg-turf-600 text-white shadow-md' : 'bg-white text-turf-700 shadow-md'
+              : darkMode ? 'text-gray-400' : 'text-gray-500'
+          }`}
+        >
+          <Eye size={16} />
+          Ver agenda
+        </button>
+      </div>
 
-      {/* Calendar */}
-      <section>
-        <div className="flex items-center gap-2 mb-3">
-          <CalendarDays size={16} className={darkMode ? 'text-turf-400' : 'text-turf-600'} />
-          <h3 className={`text-sm font-bold uppercase tracking-wide ${darkMode ? 'text-gray-300' : 'text-gray-600'}`}>
-            Escoge el día
-          </h3>
-        </div>
-        <Calendar selected={date} onSelect={setDate} />
-      </section>
+      {/* BOOK VIEW */}
+      {view === 'book' && (
+        <>
+          {/* Court Selector */}
+          <section>
+            <div className="flex items-center gap-2 mb-3">
+              <MapPin size={16} className={darkMode ? 'text-turf-400' : 'text-turf-600'} />
+              <h3 className={`text-sm font-bold uppercase tracking-wide ${darkMode ? 'text-gray-300' : 'text-gray-600'}`}>
+                Escoge la cancha
+              </h3>
+            </div>
+            <CourtSelector selected={court} onSelect={setCourt} />
+          </section>
 
-      {/* Time Slots */}
-      <section>
-        <div className="flex items-center justify-between mb-3">
-          <h3 className={`text-sm font-bold uppercase tracking-wide ${darkMode ? 'text-gray-300' : 'text-gray-600'}`}>
-            Horarios disponibles
-          </h3>
-          <span className={`text-xs px-2 py-1 rounded-full font-medium ${
-            darkMode ? 'bg-gray-800 text-gray-400' : 'bg-turf-100 text-turf-700'
-          }`}>
-            {court} - {date === format(new Date(), 'yyyy-MM-dd') ? 'Hoy' : date}
-          </span>
-        </div>
-        <TimeSlots
-          reservations={filteredReservations}
-          court={court}
-          date={date}
-          selectedSlot={selectedSlot}
-          onSelectSlot={handleSlotSelect}
-        />
-      </section>
+          {/* Calendar */}
+          <section>
+            <div className="flex items-center gap-2 mb-3">
+              <CalendarDays size={16} className={darkMode ? 'text-turf-400' : 'text-turf-600'} />
+              <h3 className={`text-sm font-bold uppercase tracking-wide ${darkMode ? 'text-gray-300' : 'text-gray-600'}`}>
+                Escoge el día
+              </h3>
+            </div>
+            <Calendar selected={date} onSelect={setDate} />
+          </section>
 
-      {/* Booking Form */}
-      {showForm && selectedSlot !== null && (
+          {/* Time Slots */}
+          <section>
+            <div className="flex items-center justify-between mb-3">
+              <h3 className={`text-sm font-bold uppercase tracking-wide ${darkMode ? 'text-gray-300' : 'text-gray-600'}`}>
+                Horarios disponibles
+              </h3>
+              <span className={`text-xs px-2 py-1 rounded-full font-medium ${
+                darkMode ? 'bg-gray-800 text-gray-400' : 'bg-turf-100 text-turf-700'
+              }`}>
+                {court} - {date === format(new Date(), 'yyyy-MM-dd') ? 'Hoy' : date}
+              </span>
+            </div>
+            <TimeSlots
+              reservations={filteredReservations}
+              court={court}
+              date={date}
+              selectedSlot={selectedSlot}
+              onSelectSlot={handleSlotSelect}
+            />
+          </section>
+
+          {/* Booking Form */}
+          {showForm && selectedSlot !== null && (
+            <section className="animate-fade-in">
+              <BookingForm
+                court={court}
+                date={date}
+                startHour={selectedSlot}
+                onSuccess={handleBookingSuccess}
+                onCancel={() => { setShowForm(false); setSelectedSlot(null); }}
+              />
+            </section>
+          )}
+        </>
+      )}
+
+      {/* AGENDA VIEW */}
+      {view === 'agenda' && (
         <section className="animate-fade-in">
-          <BookingForm
-            court={court}
-            date={date}
-            startHour={selectedSlot}
-            onSuccess={handleBookingSuccess}
-            onCancel={() => { setShowForm(false); setSelectedSlot(null); }}
-          />
+          <WeeklyCalendar />
         </section>
       )}
     </div>

@@ -14,7 +14,8 @@ import {
   getConnectedAccounts,
   disconnectAccount,
   createCalendarEvent,
-  deleteCalendarEvent
+  deleteCalendarEvent,
+  listEventsForCourt
 } from './googleCalendar.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -455,6 +456,72 @@ app.get('/api/google/public-status', (req, res) => {
     Caney: accounts.Caney ? { connected: true } : { connected: false }
   });
 });
+
+// PUBLIC: List events from connected Google Calendars (read-only, sanitized)
+// Falls back to DB reservations if calendar is not connected
+app.get('/api/calendar/public-events', async (req, res) => {
+  const { start, end } = req.query;
+  if (!start || !end) {
+    return res.status(400).json({ message: 'Faltan parámetros start/end' });
+  }
+
+  const db = loadDB();
+  const accounts = getConnectedAccounts();
+  const startDate = new Date(start);
+  const endDate = new Date(end);
+
+  const events = [];
+
+  for (const court of ['Capri', 'Caney']) {
+    if (accounts[court]) {
+      // Fetch from Google Calendar
+      const googleEvents = await listEventsForCourt(court, start, end);
+      for (const ev of googleEvents) {
+        events.push({
+          id: ev.id,
+          court,
+          // Sanitize: extract just the first name (before " - ")
+          title: sanitizeEventTitle(ev.summary),
+          start: ev.start,
+          end: ev.end,
+          source: 'google'
+        });
+      }
+    } else {
+      // Fall back to DB reservations
+      const courtReservations = db.reservations.filter(r => {
+        if (r.court !== court || r.status === 'cancelled') return false;
+        const [y, m, d] = r.date.split('-').map(Number);
+        const resStart = new Date(y, m - 1, d, r.startHour, 0, 0);
+        return resStart >= startDate && resStart <= endDate;
+      });
+      for (const r of courtReservations) {
+        const [y, m, d] = r.date.split('-').map(Number);
+        const resStart = new Date(y, m - 1, d, r.startHour, 0, 0);
+        const resEnd = new Date(resStart.getTime() + r.duration * 60 * 60 * 1000);
+        events.push({
+          id: r.id,
+          court,
+          title: sanitizeEventTitle(r.name),
+          start: resStart.toISOString(),
+          end: resEnd.toISOString(),
+          source: 'db'
+        });
+      }
+    }
+  }
+
+  res.json({ events });
+});
+
+function sanitizeEventTitle(raw) {
+  if (!raw) return 'Reservado';
+  // Remove " - Cancha XYZ" suffix and keep only first name
+  const cleaned = raw.replace(/\s*-\s*Cancha\s+(Capri|Caney).*$/i, '').trim();
+  // Keep just first name to protect privacy
+  const firstName = cleaned.split(/\s+/)[0];
+  return firstName || 'Reservado';
+}
 
 // ==================== DAILY STATS ====================
 app.get('/api/stats/daily', (req, res) => {

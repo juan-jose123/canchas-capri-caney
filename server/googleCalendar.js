@@ -156,3 +156,31 @@ export async function deleteCalendarEvent(court, eventId) {
     return false;
   }
 }
+
+// Fetch events from a court's calendar between two dates (read-only, sanitized)
+export async function listEventsForCourt(court, timeMin, timeMax) {
+  try {
+    const auth = await getAuthorizedClient(court);
+    if (!auth) return [];
+    const calendar = google.calendar({ version: 'v3', auth });
+    const result = await calendar.events.list({
+      calendarId: 'primary',
+      timeMin: new Date(timeMin).toISOString(),
+      timeMax: new Date(timeMax).toISOString(),
+      singleEvents: true,
+      orderBy: 'startTime',
+      maxResults: 250
+    });
+    return (result.data.items || []).map(ev => ({
+      id: ev.id,
+      court,
+      summary: ev.summary || 'Reservado',
+      start: ev.start?.dateTime || ev.start?.date,
+      end: ev.end?.dateTime || ev.end?.date,
+      htmlLink: ev.htmlLink || null
+    }));
+  } catch (err) {
+    console.error(`Error listando eventos ${court}:`, err.message);
+    return [];
+  }
+}
