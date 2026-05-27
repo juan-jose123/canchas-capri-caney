@@ -7,6 +7,15 @@ import { dirname, join } from 'path';
 import { fileURLToPath } from 'url';
 import { existsSync } from 'fs';
 import { loadDB, saveDB } from './db.js';
+import {
+  isGoogleConfigured,
+  getAuthUrl,
+  handleCallback,
+  getConnectedAccounts,
+  disconnectAccount,
+  createCalendarEvent,
+  deleteCalendarEvent
+} from './googleCalendar.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const app = express();
@@ -24,6 +33,38 @@ if (existsSync(distPath)) {
   app.use(express.static(distPath));
 }
 
+// ==================== HELPERS ====================
+function getHourPrice(court, hour, db) {
+  const prices = db.settings.pricing[court];
+  if (!prices) return 0;
+  return hour < db.settings.nightHour ? prices.beforeNight : prices.night;
+}
+
+function calculateTotalPrice(court, startHour, duration, db) {
+  let total = 0;
+  let h = startHour;
+  let remaining = duration;
+  while (remaining > 0) {
+    const slot = Math.min(1, remaining);
+    total += getHourPrice(court, Math.floor(h), db) * slot;
+    h += slot;
+    remaining -= slot;
+  }
+  return Math.round(total);
+}
+
+function hasConflict(db, court, date, startHour, duration) {
+  const endHour = startHour + duration;
+  return db.reservations.find(r =>
+    r.court === court &&
+    r.date === date &&
+    r.status !== 'cancelled' &&
+    ((startHour >= r.startHour && startHour < r.startHour + r.duration) ||
+     (endHour > r.startHour && endHour <= r.startHour + r.duration) ||
+     (startHour <= r.startHour && endHour >= r.startHour + r.duration))
+  );
+}
+
 // ==================== AUTH ====================
 app.post('/api/auth/login', (req, res) => {
   const { password } = req.body;
@@ -33,6 +74,27 @@ app.post('/api/auth/login', (req, res) => {
   } else {
     res.status(401).json({ success: false, message: 'Contraseña incorrecta' });
   }
+});
+
+// ==================== PRICING ====================
+app.get('/api/pricing', (req, res) => {
+  const db = loadDB();
+  res.json({
+    pricing: db.settings.pricing,
+    nightHour: db.settings.nightHour,
+    fixedAdvance: db.settings.fixedAdvance
+  });
+});
+
+app.post('/api/pricing/calculate', (req, res) => {
+  const { court, startHour, duration } = req.body;
+  const db = loadDB();
+  const total = calculateTotalPrice(court, startHour, duration, db);
+  res.json({
+    total,
+    advance: db.settings.fixedAdvance,
+    remaining: total - db.settings.fixedAdvance
+  });
 });
 
 // ==================== RESERVATIONS ====================
@@ -50,48 +112,84 @@ app.get('/api/reservations/all', (req, res) => {
   res.json(db.reservations);
 });
 
-app.post('/api/reservations', (req, res) => {
+// ==================== PSE PAYMENT FLOW ====================
+// Step 1: Initiate payment - creates a pending payment that holds the slot temporarily
+app.post('/api/payments/initiate', (req, res) => {
   const db = loadDB();
-  const { name, phone, court, date, startHour, duration, vipCode, advance } = req.body;
+  const { name, phone, court, date, startHour, duration, vipCode, bank } = req.body;
 
-  // Check for conflicts
-  const endHour = startHour + duration;
-  const conflict = db.reservations.find(r =>
-    r.court === court &&
-    r.date === date &&
-    r.status !== 'cancelled' &&
-    ((startHour >= r.startHour && startHour < r.startHour + r.duration) ||
-     (endHour > r.startHour && endHour <= r.startHour + r.duration) ||
-     (startHour <= r.startHour && endHour >= r.startHour + r.duration))
-  );
-
-  if (conflict) {
+  // Validate slot availability
+  if (hasConflict(db, court, date, startHour, duration)) {
     return res.status(409).json({ success: false, message: 'Horario no disponible' });
   }
 
-  // Validate VIP code if provided
-  let isVip = false;
+  // VIP code path - skip payment entirely
   if (vipCode) {
     const validCode = db.vipCodes.find(c => c.code === vipCode && c.active);
     if (!validCode) {
       return res.status(400).json({ success: false, message: 'Código VIP inválido' });
     }
-    isVip = true;
+    // Create reservation immediately for VIP
+    return createReservationFinal(req, res, db, true);
   }
 
-  const totalPrice = duration * db.settings.pricePerHour;
-  const advanceAmount = isVip ? 0 : (advance || Math.round(totalPrice * 0.3));
+  // Validate bank selection for PSE
+  if (!bank) {
+    return res.status(400).json({ success: false, message: 'Debes seleccionar un banco' });
+  }
 
-  // Check active promotions
+  const totalPrice = calculateTotalPrice(court, startHour, duration, db);
+  const advance = db.settings.fixedAdvance;
+
+  const paymentId = uuidv4();
+  const payment = {
+    id: paymentId,
+    name,
+    phone,
+    court,
+    date,
+    startHour,
+    duration,
+    totalPrice,
+    advance,
+    bank,
+    status: 'pending',
+    createdAt: new Date().toISOString(),
+    expiresAt: new Date(Date.now() + 10 * 60 * 1000).toISOString() // 10 min
+  };
+
+  db.pendingPayments.push(payment);
+  saveDB(db);
+
+  // Return PSE simulated redirect URL
+  res.json({
+    success: true,
+    paymentId,
+    redirectUrl: `/pse-simulate?paymentId=${paymentId}`,
+    bank,
+    amount: advance,
+    expiresAt: payment.expiresAt
+  });
+});
+
+async function createReservationFinal(req, res, db, isVip) {
+  const { name, phone, court, date, startHour, duration, vipCode } = req.body;
+
+  if (hasConflict(db, court, date, startHour, duration)) {
+    return res.status(409).json({ success: false, message: 'Horario no disponible' });
+  }
+
+  const totalPrice = calculateTotalPrice(court, startHour, duration, db);
+
+  // Active promotion
   let discount = 0;
-  const activePromo = db.promotions.find(p => 
+  const activePromo = db.promotions.find(p =>
     p.active && new Date(p.expiresAt) > new Date()
   );
-  if (activePromo) {
-    discount = activePromo.discountPercent;
-  }
-
+  if (activePromo) discount = activePromo.discountPercent;
   const finalPrice = totalPrice - (totalPrice * discount / 100);
+
+  const advance = isVip ? 0 : db.settings.fixedAdvance;
 
   const reservation = {
     id: uuidv4(),
@@ -102,29 +200,106 @@ app.post('/api/reservations', (req, res) => {
     startHour,
     duration,
     totalPrice: finalPrice,
-    advance: isVip ? 0 : advanceAmount,
-    remaining: isVip ? finalPrice : finalPrice - advanceAmount,
+    advance,
+    remaining: finalPrice - advance,
     isVip,
     discount,
     status: 'confirmed',
     paymentConfirmed: isVip,
+    paymentMethod: isVip ? 'vip' : 'pse',
     createdAt: new Date().toISOString()
   };
 
   db.reservations.push(reservation);
   saveDB(db);
 
+  // Create Google Calendar event (if connected)
+  const calResult = await createCalendarEvent(reservation);
+  if (calResult.success) {
+    reservation.googleEventId = calResult.eventId;
+    reservation.googleEventLink = calResult.eventLink;
+    const refreshDb = loadDB();
+    const r = refreshDb.reservations.find(x => x.id === reservation.id);
+    if (r) {
+      r.googleEventId = calResult.eventId;
+      r.googleEventLink = calResult.eventLink;
+      saveDB(refreshDb);
+    }
+  }
+
   io.emit('reservation-update', { type: 'new', reservation });
-  res.json({ success: true, reservation });
+  return res.json({ success: true, reservation });
+}
+
+// Step 2: Simulate PSE payment confirmation
+app.post('/api/payments/:id/confirm', async (req, res) => {
+  const db = loadDB();
+  const payment = db.pendingPayments.find(p => p.id === req.params.id);
+  if (!payment) return res.status(404).json({ success: false, message: 'Pago no encontrado' });
+  if (payment.status !== 'pending') {
+    return res.status(400).json({ success: false, message: 'Pago ya procesado' });
+  }
+  if (new Date(payment.expiresAt) < new Date()) {
+    payment.status = 'expired';
+    saveDB(db);
+    return res.status(400).json({ success: false, message: 'Pago expirado' });
+  }
+
+  // Re-check conflict (in case someone else booked while paying)
+  if (hasConflict(db, payment.court, payment.date, payment.startHour, payment.duration)) {
+    payment.status = 'failed';
+    saveDB(db);
+    return res.status(409).json({ success: false, message: 'Horario ya no disponible. El pago será reembolsado.' });
+  }
+
+  // Mark payment as approved
+  payment.status = 'approved';
+  payment.approvedAt = new Date().toISOString();
+  saveDB(db);
+
+  // Create reservation
+  req.body = {
+    name: payment.name,
+    phone: payment.phone,
+    court: payment.court,
+    date: payment.date,
+    startHour: payment.startHour,
+    duration: payment.duration
+  };
+  return createReservationFinal(req, res, loadDB(), false);
 });
 
-app.put('/api/reservations/:id/cancel', (req, res) => {
+// Step 2b: Reject payment
+app.post('/api/payments/:id/reject', (req, res) => {
+  const db = loadDB();
+  const payment = db.pendingPayments.find(p => p.id === req.params.id);
+  if (!payment) return res.status(404).json({ success: false, message: 'No encontrado' });
+  payment.status = 'rejected';
+  saveDB(db);
+  res.json({ success: true });
+});
+
+// Get payment status
+app.get('/api/payments/:id', (req, res) => {
+  const db = loadDB();
+  const payment = db.pendingPayments.find(p => p.id === req.params.id);
+  if (!payment) return res.status(404).json({ message: 'No encontrado' });
+  res.json(payment);
+});
+
+// ==================== RESERVATION ACTIONS ====================
+app.put('/api/reservations/:id/cancel', async (req, res) => {
   const db = loadDB();
   const reservation = db.reservations.find(r => r.id === req.params.id);
   if (!reservation) return res.status(404).json({ message: 'No encontrada' });
 
   reservation.status = 'cancelled';
   saveDB(db);
+
+  // Delete Google Calendar event if exists
+  if (reservation.googleEventId) {
+    await deleteCalendarEvent(reservation.court, reservation.googleEventId);
+  }
 
   io.emit('reservation-update', { type: 'cancel', reservation });
   res.json({ success: true, reservation });
@@ -228,6 +403,59 @@ app.put('/api/settings', (req, res) => {
   res.json({ success: true, settings: db.settings });
 });
 
+// ==================== GOOGLE CALENDAR ====================
+app.get('/api/google/status', (req, res) => {
+  res.json({
+    configured: isGoogleConfigured(),
+    accounts: getConnectedAccounts()
+  });
+});
+
+app.get('/api/google/auth/:court', (req, res) => {
+  const { court } = req.params;
+  if (!isGoogleConfigured()) {
+    return res.status(400).json({
+      success: false,
+      message: 'Google no está configurado. Agrega GOOGLE_CLIENT_ID y GOOGLE_CLIENT_SECRET.'
+    });
+  }
+  if (court !== 'Capri' && court !== 'Caney') {
+    return res.status(400).json({ success: false, message: 'Cancha inválida' });
+  }
+  const url = getAuthUrl(court);
+  res.json({ success: true, url });
+});
+
+app.get('/api/google/callback', async (req, res) => {
+  const { code, state, court: courtParam } = req.query;
+  const court = courtParam || state;
+  if (!code || !court) {
+    return res.redirect('/admin?google=error');
+  }
+  try {
+    const result = await handleCallback(court, code);
+    res.redirect(`/admin?google=success&email=${encodeURIComponent(result.email)}&court=${court}`);
+  } catch (err) {
+    console.error('OAuth callback error:', err.message);
+    res.redirect('/admin?google=error');
+  }
+});
+
+app.delete('/api/google/disconnect/:court', (req, res) => {
+  const { court } = req.params;
+  disconnectAccount(court);
+  res.json({ success: true });
+});
+
+// Public read-only calendar info (only basic data)
+app.get('/api/google/public-status', (req, res) => {
+  const accounts = getConnectedAccounts();
+  res.json({
+    Capri: accounts.Capri ? { connected: true } : { connected: false },
+    Caney: accounts.Caney ? { connected: true } : { connected: false }
+  });
+});
+
 // ==================== DAILY STATS ====================
 app.get('/api/stats/daily', (req, res) => {
   const db = loadDB();
@@ -257,7 +485,6 @@ app.get('/api/stats/daily', (req, res) => {
 // ==================== SOCKET.IO ====================
 io.on('connection', (socket) => {
   console.log('Cliente conectado:', socket.id);
-
   socket.on('disconnect', () => {
     console.log('Cliente desconectado:', socket.id);
   });
@@ -278,4 +505,5 @@ if (existsSync(distPath)) {
 const PORT = process.env.PORT || 3001;
 server.listen(PORT, () => {
   console.log(`Servidor corriendo en puerto ${PORT}`);
+  console.log(`Google Calendar: ${isGoogleConfigured() ? 'Configurado' : 'NO configurado (agrega GOOGLE_CLIENT_ID y GOOGLE_CLIENT_SECRET)'}`);
 });
